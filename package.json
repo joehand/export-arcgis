@@ -1,0 +1,19 @@
+{
+  "name": "export-arcgis",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "standard && tape test/*.js | tap-spec"
+  },
+  "author": "Joe Hand <joe@hand.email> (https://joeahand.com/)",
+  "license": "MIT",
+  "dependencies": {
+    "concat-stream": "^1.6.0",
+    "esri-dump": "^0.3.0",
+    "mkdirp": "^0.5.1",
+    "ndjson": "^1.5.0",
+    "pump": "^1.0.2",
+    "request": "^2.79.0"
+  }
+}
