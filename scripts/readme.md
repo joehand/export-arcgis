@@ -24,6 +24,10 @@ cat services.json | node scripts/layers.js > layers.json
 
 Download all data from every layer in a json file.
 
+This requires `esri2geojson`, via [esri-dump](https://github.com/openaddresses/esri-dump) python module, to be available in the current path.
+
+There is also a js version of `esri-dump` but it is less maintained and more buggy =(.
+
 ### Usage
 
 ```
