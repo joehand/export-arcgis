@@ -19,3 +19,13 @@ Walk ArcGIS services (created with `services.js`) and get all layers for every s
 ```
 cat services.json | node scripts/layers.js > layers.json
 ```
+
+## `data.js`
+
+Download all data from every layer in a json file.
+
+### Usage
+
+```
+cat layers.json | node scripts/data.js data-dir > downloads.json
+```

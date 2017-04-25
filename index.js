@@ -1,6 +1,7 @@
 var assert = require('assert')
 var fs = require('fs')
 var path = require('path')
+var url = require('url')
 var agsWalk = require('ags-walk')
 var esriDump = require('esri-dump')
 var ndjson = require('ndjson')
@@ -9,83 +10,114 @@ var request = require('request')
 var mkdirp = require('mkdirp')
 var collectJson = require('collect-json')
 var through = require('through2')
+var transform = require('parallel-transform')
+var debug = require('debug')('export-arcgis')
 
 module.exports = ExportArcGIS
 
 function ExportArcGIS (url, opts) {
-  assert.same(typeof url, 'string', 'url required for export')
+  if (!(this instanceof ExportArcGIS)) return new ExportArcGIS(url, opts)
+  assert.equal(typeof url, 'string', 'url required for export')
   opts = opts || {}
 
   this.server = url
   this.options = opts
   this.dir = opts.dir || path.join(process.cwd(), 'data')
   this.services = []
+
+  mkdirp.sync(this.dir)
 }
 
-ExportArcGIS.prototype._getServices = function (cb) {
+ExportArcGIS.prototype.getServices = function (cb) {
+  debug('getServices')
   var self = this
   agsWalk(self.server, function (err, services) {
     if (err) return cb(err)
+    debug(`Got ${services.length} services`)
+    if (!services[0].url) {
+      // add url to service list
+      // TODO: why aren't these in here already for some servers? API change?
+      services.map(function (service) {
+        service.url = url.resolve(self.server, service.name + '/' + service.type)
+      })
+    }
+
     self.services = services
     cb(null, services)
   })
 }
 
-ExportArcGIS.prototype.getAllMetadata = function (opts, cb) {
+ExportArcGIS.prototype.getServicesMetadata = function (services, cb) {
+  assert.ok(services, 'services required')
+  debug('getServiceMetadata')
+
   var self = this
-  if (!self.services) return self._getServices(function (err) {
-    if (err) return cb(err)
-    self.getAllMetadata(opts, cb)
+  var pending = services.length
+  var serialize = ndjson.serialize()
+  var ws = fs.createWriteStream(path.join(self.dir, 'services.json'))
+  pump(serialize, ws)
+
+  services.map(function (service) {
+    var url = service.url
+    debug('getting metadata', url)
+    request({url: url, qs: {f: 'json'}}, function (err, res, body) {
+      if (err) return cb(err)
+      if (res.statusCode !== 200) return debug('bad request', url) // TODO
+      var data = JSON.parse(body)
+      data.date = new Date()
+      data.url = url
+      data.name = service.name
+      data.serverUrl = self.url
+      serialize.write(data)
+      if (!--pending) done()
+    })
   })
 
-  self.services.map(function (service) {
-    console.log(service)
-    if (service.name === 'PotholeHotline') {
-      getMetadata(service, function (err, layers) {
-        if (err) return cb(err)
-        // if (layers) console.log(layers) // pendingLayers = pendingLayers.concat(layers)
-        if (layers) getLayerData(layers[0])
-      })
-    }
-  })
+  function done () {
+    serialize.end()
+    cb(null)
+  }
 }
 
-ExportArcGIS.prototype.getMetadata = function (service, cb) {
-  assert.ok(service, 'service required')
+ExportArcGIS.prototype.getLayersMetadata = function (cb) {
   var self = this
-  var layers
-  var url = service.url
-  var dir = path.join(self.dir, service.name)
 
-  mkdirp.sync(dir)
-  var ws = fs.createWriteStream(path.join(dir, 'metadata.json'))
-  var r = request.get({url: url, qs: {f: 'pjson'}})
+  var PARALLEL = 10
+  var output = path.join(self.dir, 'layers.json')
+  var ws = fs.createWriteStream(output)
+  var serialize = ndjson.serialize()
+  serialize.pipe(ws)
 
-  pump(r, collectJson(function (json) {
-    layers = json.layers
-    return JSON.stringify(json)
-  }), ws, function (err) {
-    if (err) return cb(err)
-    // console.log(`${service.name}: metadata downloaded`)
-    // console.log(`${service.name}: ${layers.length} layers`)
-    getLayersMetadata()
-  })
+  fs.createReadStream(path.join(__dirname, 'data', 'services.json'))
+    .pipe(ndjson.parse())
+    .pipe(through.obj(function (obj, enc, next) {
+      getLayersMetadata(obj, function (err) {
+        next()
+      })
+    }))
 
-  function getLayersMetadata () {
+  function getLayersMetadata (service, cb) {
+    debug(`${service.name}: downloading layer metadata`)
+    var layers = service.layers
+    if (!layers || !layers.length) return done()
     var pending = layers.length
-    var layerUrls = []
     layers.map(function (layer) {
-      var layerDir = path.join(dir, layer.id.toString())
       var url = service.url + '/' + layer.id
-      layerUrls.push({url: url, dir: layerDir})
-      mkdirp.sync(layerDir)
-
-      var ws = fs.createWriteStream(path.join(layerDir, 'metadata.json'))
-      pump(request.get(url, {qs: {f: 'pjson'}}), ws, function (err) {
+      request(url, {qs: {f: 'json'}}, function (err, res, body) {
         if (err) return cb(err)
-        if (!--pending) cb(null, layerUrls)
+        if (res.statusCode !== 200) return debug('bad req') // TODO
+        var data = JSON.parse(body)
+        data.url = url
+        data.parentService = service.name
+        data.date = new Date()
+        serialize.write(data)
+        if (!--pending) done()
       })
     })
+
+    function done () {
+      cb(null)
+    }
   }
 }
 
@@ -97,12 +129,12 @@ ExportArcGIS.prototype.getLayerData = function (layer) {
     features: []
   }
   var serialize = ndjson.serialize()
-  var ws = fs.createWriteStream(path.join(layer.dir, 'data.json'))
+  var ws = fs.createWriteStream(path.join(layer.dir, 'data-' + new Date().toISOString().slice(0,10) + '.json'))
   var count = 0
 
-  console.log('getting', url)
+  debug('getting', url)
   jsonStream.on('type', function (type) {
-    console.log('type', type)
+    debug('type', type)
   })
 
   pump(jsonStream, serialize, through(function (chunk, enc, next) {
@@ -110,6 +142,6 @@ ExportArcGIS.prototype.getLayerData = function (layer) {
     next(null, chunk)
   }), ws, function (err) {
     if (err) return console.error(err)
-    console.log('done got', count)
+    debug('done got', count)
   })
 }

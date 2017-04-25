@@ -10,9 +10,11 @@
   "license": "MIT",
   "dependencies": {
     "concat-stream": "^1.6.0",
+    "debug": "^2.6.1",
     "esri-dump": "^0.3.0",
     "mkdirp": "^0.5.1",
     "ndjson": "^1.5.0",
+    "parallel-transform": "^1.1.0",
     "pump": "^1.0.2",
     "request": "^2.79.0"
   }
